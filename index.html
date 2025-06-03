@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Customer - Supply Chain Management</title>
+    <title>Customer - Supply Chain </title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.1/ethers.umd.min.js"></script>
     <style>
         * {
@@ -1100,6 +1100,25 @@
 				"type": "uint256"
 			}
 		],
+		"name": "paidAmounts",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
 		"name": "payments",
 		"outputs": [
 			{
@@ -1669,8 +1688,6 @@ async function rejectQuotation(requestId) {
         alert("❌ Lỗi khi từ chối.");
     }
 }
-
-// 🆕 FUNCTION XÁC NHẬN GIAO HÀNG
 async function confirmDelivery(requestId) {
     if (!contract) {
         showStatus('Vui lòng kết nối ví trước!', 'error');
@@ -1678,69 +1695,60 @@ async function confirmDelivery(requestId) {
     }
 
     try {
-        // Kiểm tra trạng thái delivery trước khi xác nhận
         const deliveryInfo = await contract.getDelivery(requestId);
         const request = await contract.requests(requestId);
-        
-        // Kiểm tra xem có phải request của user không
+        const payment = await contract.getPayment(requestId);
+
         if (request.customer.toLowerCase() !== userAddress.toLowerCase()) {
             alert("❌ Đây không phải đơn hàng của bạn!");
             return;
         }
 
-        // Kiểm tra trạng thái delivery
-        if (Number(deliveryInfo.stage) !== 2) { // DeliveryStage.DeliveredFinal = 2
-            alert("❌ Đơn hàng chưa được giao đến bạn! Vui lòng chờ transporter cập nhật trạng thái 'Đã giao'.");
+        if (Number(deliveryInfo.stage) !== 2) {
+            alert("❌ Đơn hàng chưa được giao đến bạn!");
             return;
         }
 
-        // Kiểm tra xem đã thanh toán chưa
-        const payment = await contract.getPayment(requestId);
         if (payment.settled) {
             alert("⚠️ Đơn hàng này đã được xác nhận và thanh toán rồi!");
             return;
         }
 
-        // Xác nhận với user
+        const totalPaid = await provider.getBalance(contract.target); // bạn có thể lưu tổng tiền khách đã gửi từ client
+        const totalCost = BigInt(payment.supplierAmount) + BigInt(payment.transportFee);
+        const refundAmount = totalPaid - totalCost;
+
         const confirmResult = confirm(
             `🚚 Xác nhận bạn đã nhận được đơn hàng #${requestId}?\n\n` +
             `📦 Sản phẩm: ${request.productName}\n` +
             `🔢 Số lượng: ${request.quantity}\n` +
             `💰 Tổng tiền: ${ethers.formatEther(payment.supplierAmount)} ETH\n` +
-            `🚛 Phí vận chuyển: ${ethers.formatEther(payment.transportFee)} ETH\n\n` +
-            `⚠️ Sau khi xác nhận, tiền sẽ được chuyển cho supplier và transporter!`
+            `🚛 Phí vận chuyển: ${ethers.formatEther(payment.transportFee)} ETH\n` +
+            `🔄 Hoàn lại: ${ethers.formatEther(refundAmount)} ETH\n\n` +
+            `⚠️ Sau khi xác nhận, tiền sẽ được chuyển cho supplier và transporter,\n` +
+            `và phần dư sẽ được hoàn về ví của bạn.`
         );
 
-        if (!confirmResult) {
-            return;
-        }
+        if (!confirmResult) return;
 
-        // Gọi contract function
         showStatus('⏳ Đang xác nhận giao hàng...', 'info');
-        
         const tx = await contract.confirmReceipt(requestId);
-        
         showStatus('⏳ Đang chờ xác nhận transaction...', 'info');
-        
         const receipt = await tx.wait();
-        
+
         showStatus(
             `✅ Đã xác nhận giao hàng thành công!<br>
-             💰 Đã thanh toán cho supplier và transporter<br>
+             💰 Đã thanh toán và hoàn lại phần dư<br>
              📄 TX Hash: ${receipt.hash}`, 
             'success'
         );
 
-        // Refresh danh sách requests
         loadMyRequests();
-        
-        alert("🎉 Xác nhận giao hàng thành công! Cảm ơn bạn đã mua hàng.");
-
+        alert("🎉 Cảm ơn bạn! Giao hàng đã được xác nhận và hoàn tiền dư thành công.");
     } catch (error) {
         console.error('Lỗi xác nhận giao hàng:', error);
-        
         let errorMessage = "❌ Lỗi xác nhận giao hàng: ";
-        
+
         if (error.message.includes("Not delivered")) {
             errorMessage += "Đơn hàng chưa được giao!";
         } else if (error.message.includes("Already settled")) {
@@ -1750,11 +1758,12 @@ async function confirmDelivery(requestId) {
         } else {
             errorMessage += error.message;
         }
-        
+
         showStatus(errorMessage, 'error');
         alert(errorMessage);
     }
 }
+
 
 // 🆕 FUNCTION KIỂM TRA TRẠNG THÁI GIAO HÀNG
 async function checkDeliveryStatus(requestId) {
@@ -1825,9 +1834,9 @@ async function loadMyRequests() {
                     <p><strong>🆔 ID:</strong> ${id}</p>
                     <p><strong>📦 Sản phẩm:</strong> ${req.productName}</p>
                     <p><strong>🔢 Số lượng:</strong> ${req.quantity}</p>
-                    <p><strong>💰 Giá tối đa:</strong> ${req.maxUnitPrice} Wei</p>
+                    <p><strong>💰 Giá tối đa 1 đơn vị:</strong> ${req.maxUnitPrice} Wei</p>
                     <p><strong>📌 Trạng thái:</strong> ${getStatusText(status)}</p>
-                    <p><strong>💬 Giá được báo:</strong> ${Number(offeredPrice)} Wei</p>
+                    <p><strong>💬 Giá được báo 1 đơn vị:</strong> ${Number(offeredPrice)} Wei</p>
                     <p><strong>📍 Địa chỉ giao:</strong> ${req.deliveryAddress}</p>
             `;
 
